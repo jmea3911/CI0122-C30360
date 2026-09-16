@@ -1,34 +1,12 @@
 /**
   *   CI-0122 Sistemas Operativos - Tarea Programada I
   *   "Juego de la papa caliente" - anillo de procesos, usando la clase Buzon
-  *   (una sola cola de mensajes System V, direccionada por tipo/mtype)
-  *
-  *   UCR-ECCI
   *
   *   Uso:  ./papa n v [H|A]
   *     n   -> cantidad de participantes (procesos en el anillo)
   *     v   -> valor inicial de la papa
   *     H|A -> sentido: H horario (defecto, i -> i+1, n-1 -> 0)
   *                     A antihorario (i -> i-1, 0 -> n-1)
-  *
-  *   Direccionamiento con un solo Buzon:
-  *     Como Buzon usa una unica cola (KEY fija), cada participante i
-  *     "escucha" con Recibir(..., tipo = i+1)  (el tipo debe ser > 0),
-  *     y quien le quiera escribir usa ese mismo tipo como destino al
-  *     llamar Enviar(..., tipo = i+1). Asi una sola cola actua como n
-  *     buzones independientes.
-  *
-  *   Sincronizacion adicional (para saber quien es el ULTIMO en salir):
-  *     memoria compartida (shmget) con un contador de activos, protegida
-  *     por un semaforo System V (semget/semop), ambos con llaves fijas
-  *     derivadas de KEY (KEY+1, KEY+2).
-  *
-  *   Diseño general del juego: igual al del enunciado - cada activo que
-  *   recibe la papa aplica una regla de Collatz; si el resultado da 1,
-  *   "sale" (pasivo), elige un nuevo valor al azar y lo pasa. El ultimo
-  *   en salir (contador de activos llega a 0) es el ganador y avisa el
-  *   fin del juego mandando un valor negativo que codifica su id.
-  *
  **/
 
 #include <cstdio>
@@ -51,7 +29,7 @@ struct Papa {
    long valor;
 };
 
-/* ---- Helpers para el semaforo System V (mutex de 1 solo elemento) ---- */
+// Helpers para el semaforo System V 
 static void sem_P( int semid ) {
    struct sembuf op = { 0, -1, 0 };
    semop( semid, &op, 1 );
@@ -66,7 +44,7 @@ static long collatz_paso( long v ) {
    return 3 * v + 1;
 }
 
-/* Codigo que ejecuta cada proceso participante del anillo. */
+// Codigo que ejecuta cada proceso participante del anillo
 static void proceso_participante( int id, int siguiente, Buzon &m,
                                     int *activos, int semid ) {
    long tipo_propio    = id + 1;         // los tipos deben ser > 0
@@ -81,7 +59,7 @@ static void proceso_participante( int id, int siguiente, Buzon &m,
       m.Recibir( (void *)&msg, sizeof(msg), tipo_propio );
 
       if ( msg.valor < 0 ) {
-         /* Mensaje de fin de juego: -(id_ganador + 1) */
+         // Mensaje de fin de juego: -(id_ganador + 1) 
          int id_ganador = (int)( -msg.valor - 1 );
          if ( id_ganador == id ) {
             break;   // mi propio aviso me dio la vuelta completa al anillo
@@ -158,10 +136,10 @@ int main( int argc, char *argv[] ) {
       return 1;
    }
 
-   /* ---- Buzon: se crea UNA sola vez, antes del fork ---- */
-   Buzon m;   // constructor: msgget(KEY, ...) -> crea la cola compartida
+   // Buzon: se crea UNA sola vez, antes del fork 
+   Buzon m;   
 
-   /* ---- Elementos de sincronizacion: memoria compartida + semaforo ---- */
+   // elementos de sincronizacion
    int shmid = shmget( KEY_SHM, sizeof(int), IPC_CREAT | 0600 );
    if ( shmid == -1 ) { perror( "shmget" ); return 1; }
    int *activos = (int *) shmat( shmid, NULL, 0 );
@@ -172,7 +150,7 @@ int main( int argc, char *argv[] ) {
    if ( semid == -1 ) { perror( "semget" ); return 1; }
    if ( semctl( semid, 0, SETVAL, 1 ) == -1 ) { perror( "semctl SETVAL" ); return 1; }
 
-   /* ---- fork() de los n procesos participantes ---- */
+   //fork() de los n procesos participantes 
    pid_t *pids = new pid_t[n];
    for ( int i = 0; i < n; i++ ) {
       int siguiente = horario ? ( i + 1 ) % n : ( i - 1 + n ) % n;
@@ -189,7 +167,7 @@ int main( int argc, char *argv[] ) {
       }
    }
 
-   /* ---- main: unica decision de sincronizacion que le toca: iniciar el juego ---- */
+  
    srand( (unsigned int)( time(NULL) ^ getpid() ) );
    int inicial = rand() % n;
    long tipo_inicial = inicial + 1;
@@ -202,14 +180,14 @@ int main( int argc, char *argv[] ) {
    msg_inicial.valor = v;
    m.Enviar( (const void *)&msg_inicial, sizeof(msg_inicial), tipo_inicial );
 
-   /* main solo espera a que todos los participantes terminen. */
+   //espera a que todos los participantes terminen. 
    for ( int i = 0; i < n; i++ ) {
       int status;
       waitpid( pids[i], &status, 0 );
    }
    delete[] pids;
 
-   /* ---- Limpieza de los elementos de sincronizacion ---- */
+   // Limpieza de los elementos de sincronizacion 
    shmdt( activos );
    shmctl( shmid, IPC_RMID, NULL );
    semctl( semid, 0, IPC_RMID );
