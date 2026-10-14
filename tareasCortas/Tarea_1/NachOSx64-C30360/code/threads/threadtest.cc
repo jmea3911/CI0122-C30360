@@ -20,6 +20,7 @@
 
 
 DiningPh * dp;
+int terminados = 0;
 
 void Philo( void * p ) {
 
@@ -45,6 +46,7 @@ void Philo( void * p ) {
         currentThread->Yield();
         sleep( thinks );
     }
+    terminados++;
 
 }
 
@@ -66,6 +68,7 @@ void H( void * p ) {
         while ( hTicket == 0 ) hCond->Wait( lk );
         hTicket--;
     }
+    terminados++;
     lk->Release();
     currentThread->Finish();
 }
@@ -83,6 +86,7 @@ void O( void * p ) {
         while ( oTicket == 0 ) oCond->Wait( lk );
         oTicket--;
     }
+    terminados++;
     lk->Release();
     currentThread->Finish();
 }
@@ -137,24 +141,45 @@ ThreadTest()
 
     DEBUG('t', "Entering SimpleTest");
 
+    /*
+
     lk = new Lock( "agua" );
     hCond = new Condition( "H" );
     oCond = new Condition( "O" );
-    for ( int k = 0; k < 6; k++ ) (new Thread( "H" ))->Fork( H, NULL );
-    for ( int k = 0; k < 3; k++ ) (new Thread( "O" ))->Fork( O, NULL );
-    currentThread->Yield();
-    return;
+    for ( int k = 0; k < 5; k++ ) {
+        char * n = new char[20];
+        sprintf( n, "H %d", k );
+        (new Thread( n ))->Fork( H, NULL );
+    }
+    for ( int k = 0; k < 3; k++ ) {
+        char * n = new char[20];
+        sprintf( n, "O %d", k );
+        (new Thread( n ))->Fork( O, NULL );
+    }
+    
+    while ( terminados < 6 ) {
+        
+        currentThread->Yield();
+    }
+    currentThread->Finish();
+*/
 
-/*
+
     dp = new DiningPh();
 
     for ( long k = 0; k < 5; k++ ) {
-        Ph = new Thread( "dp" );
+        char * n = new char[20];
+        sprintf( n, "dp %ld", k );
+        Ph = new Thread( n );
         Ph->Fork( Philo, (void *) k );
     }
 
-    return;
-*/
+    while ( terminados < 5 ) {
+        
+        currentThread->Yield();
+    }
+    currentThread->Finish();
+
     char * threadName;
     Thread * newThread;
     for ( int k=1; k<5; k++ ) {
