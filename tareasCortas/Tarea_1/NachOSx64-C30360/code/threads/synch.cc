@@ -125,51 +125,59 @@ Semaphore::Destroy()
 // Note -- without a correct implementation of Condition::Wait(), 
 // the test case in the network assignment won't work!
 Lock::Lock(const char* debugName) {
-
+    name = (char*)debugName;
+    sem = new Semaphore(debugName, 1);
+    owner = NULL;
 }
-
 
 Lock::~Lock() {
-
+    delete sem;
 }
-
 
 void Lock::Acquire() {
-
+    sem->P();
+    owner = currentThread;
 }
-
 
 void Lock::Release() {
-
+    ASSERT(isHeldByCurrentThread());
+    owner = NULL;
+    sem->V();
 }
-
 
 bool Lock::isHeldByCurrentThread() {
-   return false;
+    return owner == currentThread;
 }
-
 
 Condition::Condition(const char* debugName) {
-
+    name = (char*)debugName;
+    waiting = new List<Semaphore*>;
 }
-
 
 Condition::~Condition() {
-
+    delete waiting;
 }
 
-
-void Condition::Wait( Lock * conditionLock ) {
-
+void Condition::Wait(Lock* conditionLock) {
+    ASSERT(conditionLock->isHeldByCurrentThread());
+    Semaphore* s = new Semaphore("cond-wait", 0);
+    waiting->Append(s);          // me anoto mientras tengo el lock
+    conditionLock->Release();
+    s->P();                      // duermo hasta que me hagan Signal
+    conditionLock->Acquire();
+    delete s;
 }
 
-
-void Condition::Signal( Lock * conditionLock ) {
-
+void Condition::Signal(Lock* conditionLock) {
+    ASSERT(conditionLock->isHeldByCurrentThread());
+    Semaphore* s = waiting->Remove();
+    if (s != NULL) s->V();
 }
 
-
-void Condition::Broadcast( Lock * conditionLock ) {
+void Condition::Broadcast(Lock* conditionLock) {
+    ASSERT(conditionLock->isHeldByCurrentThread());
+    Semaphore* s;
+    while ((s = waiting->Remove()) != NULL) s->V();
 }
 
 

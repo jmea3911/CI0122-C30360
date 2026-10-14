@@ -83,6 +83,8 @@ class Lock {
 
   private:
     char* name;				// for debugging
+    Semaphore* sem;      // semáforo binario 
+    Thread* owner;       // hilo que tiene el lock, o NULL
     // plus some other stuff you'll need to define
 };
 
@@ -135,6 +137,7 @@ class Condition {
 
   private:
     char* name;
+    List<Semaphore*>* waiting;  
     // plus some other stuff you'll need to define
 };
 

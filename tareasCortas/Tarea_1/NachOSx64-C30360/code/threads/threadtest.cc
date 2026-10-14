@@ -17,6 +17,8 @@
 #include "system.h"
 #include "diningph.h"
 
+
+
 DiningPh * dp;
 
 void Philo( void * p ) {
@@ -46,14 +48,43 @@ void Philo( void * p ) {
 
 }
 
-int cO = 0;
-int cH = 0;
-Semaphore * sH;
+Lock* lk;
+Condition *hCond, *oCond;
+int hWait = 0, oWait = 0;     // hilos esperando
+int hTicket = 0, oTicket = 0; // permisos para salir
 
 void H( void * p ) {
+    lk->Acquire();
+    if ( hWait >= 1 && oWait >= 1 ) {   // yo completo una molécula
+        hWait--; oWait--;
+        hTicket++; oTicket++;
+        hCond->Signal( lk );
+        oCond->Signal( lk );
+        printf( "*** Molécula de agua formada\n" );
+    } else {
+        hWait++;
+        while ( hTicket == 0 ) hCond->Wait( lk );
+        hTicket--;
+    }
+    lk->Release();
+    currentThread->Finish();
 }
 
 void O( void * p ) {
+    lk->Acquire();
+    if ( hWait >= 2 ) {                 // ya hay dos H esperando
+        hWait -= 2;
+        hTicket += 2;
+        hCond->Signal( lk );
+        hCond->Signal( lk );
+        printf( "*** Molécula de agua formada\n" );
+    } else {
+        oWait++;
+        while ( oTicket == 0 ) oCond->Wait( lk );
+        oTicket--;
+    }
+    lk->Release();
+    currentThread->Finish();
 }
 
 //----------------------------------------------------------------------
@@ -105,6 +136,14 @@ ThreadTest()
     Thread * Ph;
 
     DEBUG('t', "Entering SimpleTest");
+
+    lk = new Lock( "agua" );
+    hCond = new Condition( "H" );
+    oCond = new Condition( "O" );
+    for ( int k = 0; k < 6; k++ ) (new Thread( "H" ))->Fork( H, NULL );
+    for ( int k = 0; k < 3; k++ ) (new Thread( "O" ))->Fork( O, NULL );
+    currentThread->Yield();
+    return;
 
 /*
     dp = new DiningPh();
