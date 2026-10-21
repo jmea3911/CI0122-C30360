@@ -43,6 +43,7 @@
 #include "utility.h"
 
 #ifdef USER_PROGRAM
+class NachosOpenFilesTable;
 #include "machine.h"
 #include "addrspace.h"
 #endif
@@ -126,6 +127,7 @@ class Thread {
     void RestoreUserState();		// restore user-level register state
 
     AddrSpace *space;			// User code this thread is running.
+    NachosOpenFilesTable *openFilesTable;	// Files opened by the process
 #endif
 };
 

@@ -15,6 +15,7 @@
 #include "console.h"
 #include "addrspace.h"
 #include "synch.h"
+#include "nachostabla.h"
 
 //----------------------------------------------------------------------
 // StartProcess
@@ -32,7 +33,8 @@ StartProcess(const char *filename)
 	return;
     }
 
-    currentThread->space = new AddrSpace(executable);    
+    currentThread->space = new AddrSpace(executable);   
+    currentThread->openFilesTable = new NachosOpenFilesTable(); 
 
     delete executable;			// close file
 

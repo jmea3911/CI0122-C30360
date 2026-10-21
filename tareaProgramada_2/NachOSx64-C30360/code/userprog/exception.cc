@@ -27,6 +27,9 @@
 #include "copyright.h"
 #include "system.h"
 #include "syscall.h"
+#include "nachostabla.h"
+#include <unistd.h>
+#include <fcntl.h>
 
 #define SC_NachOS	015177
 
@@ -39,6 +42,29 @@ void returnFromSystemCall() {
    machine->WriteRegister( PCReg, npc );           // PC <- NextPC
    machine->WriteRegister( NextPCReg, npc + 4 );   // NextPC <- NextPC + 4
 
+}
+
+static void readStringFromUser( int addr, char * buffer, int max ) {
+   int i = 0;
+   int value = 1;
+   while ( i < max - 1 && value != 0 ) {
+      machine->ReadMem( addr + i, 1, &value );
+      buffer[ i++ ] = (char) value;
+   }
+   buffer[ i ] = '\0';
+}
+
+static void readBufferFromUser( int addr, char * buffer, int size ) {
+   for ( int i = 0; i < size; i++ ) {
+      int value;
+      machine->ReadMem( addr + i, 1, &value );
+      buffer[ i ] = (char) value;
+   }
+}
+
+static void writeBufferToUser( int addr, const char * buffer, int size ) {
+   for ( int i = 0; i < size; i++ )
+      machine->WriteMem( addr + i, 1, (unsigned char) buffer[ i ] );
 }
 
 /*
@@ -59,8 +85,12 @@ void NachOS_Exit() {		// System call 1
    int status = machine->ReadRegister( 4 );
    DEBUG( 'u', "Exit system call, status %d\n", status );
 
-   // The frames are given back to the bitmap by ~AddrSpace, which runs
-   // when the finished thread is destroyed.
+   NachosOpenFilesTable * table = currentThread->openFilesTable;
+   if ( table != NULL ) {
+      currentThread->openFilesTable = NULL;
+      if ( table->delThread() == 0 )
+         delete table;
+   }
    currentThread->Finish();
 
 }
@@ -84,6 +114,15 @@ void NachOS_Join() {		// System call 3
  *  System call interface: void Create( char * )
  */
 void NachOS_Create() {		// System call 4
+   char name[ 256 ];
+   readStringFromUser( machine->ReadRegister( 4 ), name, sizeof( name ) );
+
+   int unixHandle = open( name, O_CREAT | O_TRUNC | O_WRONLY, 0666 );
+   if ( unixHandle >= 0 )
+      close( unixHandle );		// Open is what registers it in the table
+
+   machine->WriteRegister( 2, unixHandle >= 0 ? 0 : -1 );
+   returnFromSystemCall();
 }
 
 
@@ -91,47 +130,82 @@ void NachOS_Create() {		// System call 4
  *  System call interface: OpenFileId Open( char * )
  */
 void NachOS_Open() {		// System call 5
+   char name[ 256 ];
+   int nachosHandle = -1;
+   NachosOpenFilesTable * table = currentThread->openFilesTable;
+
+   readStringFromUser( machine->ReadRegister( 4 ), name, sizeof( name ) );
+
+   int unixHandle = open( name, O_RDWR );
+   if ( unixHandle < 0 )
+      unixHandle = open( name, O_RDONLY );	// maybe it is read-only
+
+   if ( unixHandle >= 0 ) {
+      if ( table != NULL )
+         nachosHandle = table->Open( unixHandle );
+      if ( nachosHandle < 0 )			// no table or table full
+         close( unixHandle );
+   }
+
+   machine->WriteRegister( 2, nachosHandle );
+   returnFromSystemCall();
 }
 
 
 /*
  *  System call interface: OpenFileId Write( char *, int, OpenFileId )
  */
-void NachOS_Write() {		// System call 6
-
-   int addr = machine->ReadRegister( 4 );      // user buffer address
-   int size = machine->ReadRegister( 5 );      // bytes to write
+void NachOS_Write() {		// System call 7
+   int addr = machine->ReadRegister( 4 );
+   int size = machine->ReadRegister( 5 );
    OpenFileId descriptor = machine->ReadRegister( 6 );
    int written = -1;
+   NachosOpenFilesTable * table = currentThread->openFilesTable;
 
-   if ( size > 0 && descriptor == ConsoleOutput ) {
-      char * buffer = new char[ size + 1 ];
-      for ( int i = 0; i < size; i++ ) {
-         int value;
-         machine->ReadMem( addr + i, 1, &value );    // one byte at a time
-         buffer[ i ] = (char) value;
-      }
-      buffer[ size ] = '\0';
-      printf( "%s", buffer );
-      fflush( stdout );
-      delete [] buffer;
-      written = size;
-   } else if ( descriptor == ConsoleError ) {
-      printf( "%d\n", machine->ReadRegister( 4 ) );   // prints an integer
+   if ( descriptor == ConsoleError ) {
+      printf( "%d\n", addr );		// trick: prints an integer
       written = 0;
+   } else if ( size > 0 && descriptor != ConsoleInput ) {
+      char * buffer = new char[ size ];
+      readBufferFromUser( addr, buffer, size );
+
+      if ( descriptor == ConsoleOutput ) {
+         fwrite( buffer, 1, size, stdout );
+         fflush( stdout );
+         written = size;
+      } else if ( table != NULL && table->isOpened( descriptor ) ) {
+         written = write( table->getUnixHandle( descriptor ), buffer, size );
+      }
+      delete [] buffer;
    }
-   // other descriptors: open files table, still to do (returns -1)
 
-   machine->WriteRegister( 2, written );     // result goes in r2
+   machine->WriteRegister( 2, written );
    returnFromSystemCall();
-
 }
 
 
 /*
  *  System call interface: OpenFileId Read( char *, int, OpenFileId )
  */
-void NachOS_Read() {		// System call 7
+void NachOS_Read() {		// System call 6
+   int addr = machine->ReadRegister( 4 );
+   int size = machine->ReadRegister( 5 );
+   OpenFileId descriptor = machine->ReadRegister( 6 );
+   int count = -1;
+   NachosOpenFilesTable * table = currentThread->openFilesTable;
+
+   // The output of the console can not be read
+   if ( size > 0 && descriptor != ConsoleOutput && descriptor != ConsoleError
+         && table != NULL && table->isOpened( descriptor ) ) {
+      char * buffer = new char[ size ];
+      count = read( table->getUnixHandle( descriptor ), buffer, size );
+      if ( count > 0 )
+         writeBufferToUser( addr, buffer, count );
+      delete [] buffer;
+   }
+
+   machine->WriteRegister( 2, count );		// 0 means end of file
+   returnFromSystemCall();
 }
 
 
@@ -139,6 +213,11 @@ void NachOS_Read() {		// System call 7
  *  System call interface: void Close( OpenFileId )
  */
 void NachOS_Close() {		// System call 8
+   OpenFileId descriptor = machine->ReadRegister( 4 );
+   NachosOpenFilesTable * table = currentThread->openFilesTable;
+
+   machine->WriteRegister( 2, table != NULL ? table->Close( descriptor ) : -1 );
+   returnFromSystemCall();
 }
 
 

@@ -18,7 +18,7 @@
 #include "copyright.h"
 #include "filesys.h"
 
-#define UserStackSize		2048 	// increase this as necessary!
+#define UserStackSize		1280 	// increase this as necessary!
 
 class AddrSpace {
   public:
