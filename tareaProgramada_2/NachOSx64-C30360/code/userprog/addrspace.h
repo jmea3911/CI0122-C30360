@@ -27,6 +27,8 @@ class AddrSpace {
 					// stored in the file "executable"
     ~AddrSpace();			// De-allocate an address space
 
+    AddrSpace(AddrSpace *parent);
+
     void InitRegisters();		// Initialize user-level CPU registers,
 					// before jumping to user code
 
@@ -39,6 +41,8 @@ class AddrSpace {
     int inFileAddr);  
     TranslationEntry *pageTable;	// Assume linear page table translation
 					// for now!
+    unsigned int sharedPages;		// Pages of code and data (not stack)
+    int *sharedUsers;			// How many address spaces share them
     unsigned int numPages;		// Number of pages in the virtual 
 					// address space
 };

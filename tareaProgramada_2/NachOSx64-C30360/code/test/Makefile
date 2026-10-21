@@ -50,6 +50,12 @@ halt: halt.o start.o
 	$(LD) $(LDFLAGS) start.o halt.o -o halt.coff
 	../bin/coff2noff halt.coff halt
 
+forkSem.o: forkSem.c
+	$(CC) $(CFLAGS) -c forkSem.c
+forkSem: forkSem.o start.o
+	$(LD) $(LDFLAGS) start.o forkSem.o -o forkSem.coff
+	../bin/coff2noff forkSem.coff forkSem
+
 shell.o: shell.c
 	$(CC) $(CFLAGS) -c shell.c
 shell: shell.o start.o

@@ -82,18 +82,13 @@ AddrSpace::AddrSpace(OpenFile *executable)
         DEBUG('a', "Initializing address space, num pages %d, size %d\n",
                     numPages, size);
 
-// TEMPORARY TEST: mark some frames as used before anything is loaded
-    static bool preOccupied = false;
-    machine->memoryMapSem->P();
-    if (!preOccupied) {
-        for (i = 0; i <= 10; i += 2)
-            machine->memoryMap->Mark(i);
-        preOccupied = true;
-    }
+
 
 // check there are enough free frames, then take them (all under the mutex)
     if (numPages > (unsigned int)machine->memoryMap->NumClear()) {
         machine->memoryMapSem->V();
+        // code and data pages can be shared by Fork; the stack is always private
+        
         printf("Not enough free frames: need %d, have %d\n", numPages,
                 machine->memoryMap->NumClear());
         ASSERT(false);
@@ -111,6 +106,9 @@ AddrSpace::AddrSpace(OpenFile *executable)
                 pageTable[i].physicalPage);
     }
     machine->memoryMapSem->V();
+    sharedPages = numPages - UserStackSize / PageSize;
+    sharedUsers = new int;
+    *sharedUsers = 1;
 
 // zero out ONLY our own frames (uninitialized data and stack included)
     for (i = 0; i < numPages; i++)
@@ -126,6 +124,42 @@ AddrSpace::AddrSpace(OpenFile *executable)
         LoadSegment(executable, noffH.initData.virtualAddr,
                     noffH.initData.size, noffH.initData.inFileAddr);
     }
+}
+
+AddrSpace::AddrSpace(AddrSpace *parent)
+{
+    unsigned int i;
+
+    numPages = parent->numPages;
+    sharedPages = parent->sharedPages;
+    sharedUsers = parent->sharedUsers;
+
+    machine->memoryMapSem->P();
+    if (numPages - sharedPages > (unsigned int)machine->memoryMap->NumClear()) {
+        machine->memoryMapSem->V();
+        printf("Not enough free frames for a new stack\n");
+        ASSERT(false);
+    }
+    (*sharedUsers)++;
+
+    this->pageTable = new TranslationEntry[numPages];
+    for (i = 0; i < sharedPages; i++)
+        pageTable[i] = parent->pageTable[i];		// shared frames
+    for (i = sharedPages; i < numPages; i++) {		// private stack
+        pageTable[i].virtualPage = i;
+        pageTable[i].physicalPage = machine->memoryMap->Find();
+        pageTable[i].valid = true;
+        pageTable[i].use = false;
+        pageTable[i].dirty = false;
+        pageTable[i].readOnly = false;
+        DEBUG('a', "Fork: stack page %d -> physical frame %d\n", i,
+                pageTable[i].physicalPage);
+    }
+    machine->memoryMapSem->V();
+
+    for (i = sharedPages; i < numPages; i++)
+        bzero(&(machine->mainMemory[pageTable[i].physicalPage * PageSize]),
+                PageSize);
 }
 
 void
@@ -159,8 +193,16 @@ AddrSpace::~AddrSpace()
     // machine is NULL if NachOS is already cleaning up (see Cleanup)
     if (machine != NULL) {
         machine->memoryMapSem->P();
-        for (unsigned int i = 0; i < numPages; i++)
+        for (unsigned int i = sharedPages; i < numPages; i++)	// stack
             machine->memoryMap->Clear(pageTable[i].physicalPage);
+        (*sharedUsers)--;
+        if (*sharedUsers == 0) {		// last one: code and data too
+            for (unsigned int i = 0; i < sharedPages; i++)
+                machine->memoryMap->Clear(pageTable[i].physicalPage);
+            delete sharedUsers;
+        }
+        DEBUG('a', "Address space freed, free frames now: %d\n",
+                machine->memoryMap->NumClear());
         machine->memoryMapSem->V();
     }
     delete [] this->pageTable;

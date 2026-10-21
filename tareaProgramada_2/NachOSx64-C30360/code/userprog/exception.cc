@@ -30,6 +30,8 @@
 #include "nachostabla.h"
 #include <unistd.h>
 #include <fcntl.h>
+#include "synch.h"
+#include <string.h>
 
 #define SC_NachOS	015177
 
@@ -220,11 +222,41 @@ void NachOS_Close() {		// System call 8
    returnFromSystemCall();
 }
 
+void NachosForkThread( void * p ) {
 
-/*
- *  System call interface: void Fork( void (*func)() )
- */
+   AddrSpace * space = currentThread->space;
+
+   space->InitRegisters();		// set the initial register values
+   space->RestoreState();		// load page table register
+
+   // When the routine returns it goes to address 4 (the instruction after
+   // "jal main" in start.s), which leads to the Exit system call
+   machine->WriteRegister( RetAddrReg, 4 );
+   machine->WriteRegister( PCReg, (int) (long) p );
+   machine->WriteRegister( NextPCReg, (int) (long) p + 4 );
+
+   machine->Run();			// jump to the user program
+   ASSERT( false );
+}
+
 void NachOS_Fork() {		// System call 9
+
+   // ~Thread does "delete [] name", so the name must be in the heap
+   char * threadName = new char[ 32 ];
+   strcpy( threadName, "child of Fork" );
+   Thread * newT = new Thread( threadName );
+
+   // Child and father share code, data and the open files table;
+   // the child gets a new stack
+   newT->space = new AddrSpace( currentThread->space );
+   newT->openFilesTable = currentThread->openFilesTable;
+   if ( newT->openFilesTable != NULL )
+      newT->openFilesTable->addThread();
+
+   newT->Fork( NachosForkThread,
+               (void *) (long) machine->ReadRegister( 4 ) );
+
+   returnFromSystemCall();		// the father keeps running
 }
 
 
@@ -232,34 +264,63 @@ void NachOS_Fork() {		// System call 9
  *  System call interface: void Yield()
  */
 void NachOS_Yield() {		// System call 10
+
+   returnFromSystemCall();		// advance first, the registers are saved
+   currentThread->Yield();
+
 }
 
+#define MAX_USER_SEMS 64
+static Semaphore * userSems[ MAX_USER_SEMS ];	// NULL = free slot
 
-/*
- *  System call interface: Sem_t SemCreate( int )
- */
+static bool validSem( int id ) {
+   return id >= 0 && id < MAX_USER_SEMS && userSems[ id ] != NULL;
+}
+
 void NachOS_SemCreate() {		// System call 11
+   int initial = machine->ReadRegister( 4 );
+   int id = -1;
+   for ( int i = 0; i < MAX_USER_SEMS && id == -1; i++ )
+      if ( userSems[ i ] == NULL )
+         id = i;
+   if ( id != -1 )
+      userSems[ id ] = new Semaphore( "user semaphore", initial );
+   machine->WriteRegister( 2, id );
+   returnFromSystemCall();
 }
 
-
-/*
- *  System call interface: int SemDestroy( Sem_t )
- */
 void NachOS_SemDestroy() {		// System call 12
+   int id = machine->ReadRegister( 4 );
+   int result = -1;
+   if ( validSem( id ) ) {
+      delete userSems[ id ];
+      userSems[ id ] = NULL;
+      result = 0;
+   }
+   machine->WriteRegister( 2, result );
+   returnFromSystemCall();
 }
 
-
-/*
- *  System call interface: int SemSignal( Sem_t )
- */
 void NachOS_SemSignal() {		// System call 13
+   int id = machine->ReadRegister( 4 );
+   int result = -1;
+   if ( validSem( id ) ) {
+      userSems[ id ]->V();
+      result = 0;
+   }
+   machine->WriteRegister( 2, result );
+   returnFromSystemCall();
 }
 
-
-/*
- *  System call interface: int SemWait( Sem_t )
- */
 void NachOS_SemWait() {		// System call 14
+   int id = machine->ReadRegister( 4 );
+   int result = -1;
+   if ( validSem( id ) ) {
+      userSems[ id ]->P();		// may block this thread
+      result = 0;
+   }
+   machine->WriteRegister( 2, result );
+   returnFromSystemCall();
 }
 
 

@@ -229,7 +229,8 @@ Cleanup()
 //
     delete stats;
 
-    delete currentThread;
+    if ( ! strncmp( currentThread->getName(), "main", 4 ) )
+        delete currentThread;
 
     Exit(0);
 }
