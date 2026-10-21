@@ -212,6 +212,7 @@ Cleanup()
     
 #ifdef USER_PROGRAM
     delete machine;
+    machine = NULL;     // ~AddrSpace checks this
 #endif
 
 #ifdef FILESYS_NEEDED

@@ -104,6 +104,9 @@ class Instruction {
 // The procedures in this class are defined in machine.cc, mipssim.cc, and
 // translate.cc.
 
+class BitMap;
+class Semaphore;
+
 class Machine {
   public:
     Machine(bool debug);	// Initialize the simulation of the hardware
@@ -156,6 +159,10 @@ class Machine {
 
     char *mainMemory;		// physical memory to store user program,
 				// code and data, while executing
+
+	BitMap *memoryMap;          // free/used physical frames
+    Semaphore *memoryMapSem;    // mutual exclusion for memoryMap
+
     int registers[NumTotalRegs]; // CPU registers, for executing user programs
 
 

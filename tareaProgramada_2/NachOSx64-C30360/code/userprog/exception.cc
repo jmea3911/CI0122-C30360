@@ -30,6 +30,16 @@
 
 #define SC_NachOS	015177
 
+void returnFromSystemCall() {
+
+   int pc = machine->ReadRegister( PCReg );
+   int npc = machine->ReadRegister( NextPCReg );
+
+   machine->WriteRegister( PrevPCReg, pc );        // PrevPC <- PC
+   machine->WriteRegister( PCReg, npc );           // PC <- NextPC
+   machine->WriteRegister( NextPCReg, npc + 4 );   // NextPC <- NextPC + 4
+
+}
 
 /*
  *  System call interface: Halt()
@@ -46,6 +56,12 @@ void NachOS_Halt() {		// System call 0
  *  System call interface: void Exit( int )
  */
 void NachOS_Exit() {		// System call 1
+   int status = machine->ReadRegister( 4 );
+   DEBUG( 'u', "Exit system call, status %d\n", status );
+
+   // The frames are given back to the bitmap by ~AddrSpace, which runs
+   // when the finished thread is destroyed.
+   currentThread->Finish();
 
 }
 
@@ -82,6 +98,33 @@ void NachOS_Open() {		// System call 5
  *  System call interface: OpenFileId Write( char *, int, OpenFileId )
  */
 void NachOS_Write() {		// System call 6
+
+   int addr = machine->ReadRegister( 4 );      // user buffer address
+   int size = machine->ReadRegister( 5 );      // bytes to write
+   OpenFileId descriptor = machine->ReadRegister( 6 );
+   int written = -1;
+
+   if ( size > 0 && descriptor == ConsoleOutput ) {
+      char * buffer = new char[ size + 1 ];
+      for ( int i = 0; i < size; i++ ) {
+         int value;
+         machine->ReadMem( addr + i, 1, &value );    // one byte at a time
+         buffer[ i ] = (char) value;
+      }
+      buffer[ size ] = '\0';
+      printf( "%s", buffer );
+      fflush( stdout );
+      delete [] buffer;
+      written = size;
+   } else if ( descriptor == ConsoleError ) {
+      printf( "%d\n", machine->ReadRegister( 4 ) );   // prints an integer
+      written = 0;
+   }
+   // other descriptors: open files table, still to do (returns -1)
+
+   machine->WriteRegister( 2, written );     // result goes in r2
+   returnFromSystemCall();
+
 }
 
 

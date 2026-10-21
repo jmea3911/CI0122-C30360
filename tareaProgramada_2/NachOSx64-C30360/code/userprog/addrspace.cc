@@ -21,6 +21,8 @@
 #include "system.h"
 #include "addrspace.h"
 #include "noff.h"
+#include "bitmap.h"
+#include "synch.h"
 
 //----------------------------------------------------------------------
 // SwapHeader
@@ -77,44 +79,74 @@ AddrSpace::AddrSpace(OpenFile *executable)
     numPages = divRoundUp(size, PageSize);
     size = numPages * PageSize;
 
-    ASSERT(numPages <= NumPhysPages);		// check we're not trying
-						// to run anything too big --
-						// at least until we have
-						// virtual memory
+        DEBUG('a', "Initializing address space, num pages %d, size %d\n",
+                    numPages, size);
 
-    DEBUG('a', "Initializing address space, num pages %d, size %d\n", 
-					numPages, size);
-// first, set up the translation 
+// TEMPORARY TEST: mark some frames as used before anything is loaded
+    static bool preOccupied = false;
+    machine->memoryMapSem->P();
+    if (!preOccupied) {
+        for (i = 0; i <= 10; i += 2)
+            machine->memoryMap->Mark(i);
+        preOccupied = true;
+    }
+
+// check there are enough free frames, then take them (all under the mutex)
+    if (numPages > (unsigned int)machine->memoryMap->NumClear()) {
+        machine->memoryMapSem->V();
+        printf("Not enough free frames: need %d, have %d\n", numPages,
+                machine->memoryMap->NumClear());
+        ASSERT(false);
+    }
+
     this->pageTable = new TranslationEntry[numPages];
     for (i = 0; i < numPages; i++) {
-	pageTable[i].virtualPage = i;	// for now, virtual page # = phys page #
-	pageTable[i].physicalPage = i;
-	pageTable[i].valid = true;
-	pageTable[i].use = false;
-	pageTable[i].dirty = false;
-	pageTable[i].readOnly = false;  // if the code segment was entirely on 
-					// a separate page, we could set its 
-					// pages to be read-only
+        pageTable[i].virtualPage = i;
+        pageTable[i].physicalPage = machine->memoryMap->Find();
+        pageTable[i].valid = true;
+        pageTable[i].use = false;
+        pageTable[i].dirty = false;
+        pageTable[i].readOnly = false;
+        DEBUG('a', "Virtual page %d -> physical frame %d\n", i,
+                pageTable[i].physicalPage);
     }
-    
-// zero out the entire address space, to zero the unitialized data segment 
-// and the stack segment
-    bzero(machine->mainMemory, size);
+    machine->memoryMapSem->V();
 
-// then, copy in the code and data segments into memory
+// zero out ONLY our own frames (uninitialized data and stack included)
+    for (i = 0; i < numPages; i++)
+        bzero(&(machine->mainMemory[pageTable[i].physicalPage * PageSize]),
+                PageSize);
+
+// then, copy in the code and data segments, page by page
     if (noffH.code.size > 0) {
-        DEBUG('a', "Initializing code segment, at 0x%x, size %d\n", 
-			noffH.code.virtualAddr, noffH.code.size);
-        executable->ReadAt(&(machine->mainMemory[noffH.code.virtualAddr]),
-			noffH.code.size, noffH.code.inFileAddr);
+        LoadSegment(executable, noffH.code.virtualAddr, noffH.code.size,
+                    noffH.code.inFileAddr);
     }
     if (noffH.initData.size > 0) {
-        DEBUG('a', "Initializing data segment, at 0x%x, size %d\n", 
-			noffH.initData.virtualAddr, noffH.initData.size);
-        executable->ReadAt(&(machine->mainMemory[noffH.initData.virtualAddr]),
-			noffH.initData.size, noffH.initData.inFileAddr);
+        LoadSegment(executable, noffH.initData.virtualAddr,
+                    noffH.initData.size, noffH.initData.inFileAddr);
     }
+}
 
+void
+AddrSpace::LoadSegment(OpenFile *executable, int virtualAddr, int size,
+                       int inFileAddr)
+{
+    int done = 0;
+
+    while (done < size) {
+        int vaddr = virtualAddr + done;
+        int vpage = vaddr / PageSize;
+        int offset = vaddr % PageSize;
+        int chunk = PageSize - offset;      // up to the end of this page
+        if (chunk > size - done)
+            chunk = size - done;            // last, partial chunk
+
+        int physAddr = pageTable[vpage].physicalPage * PageSize + offset;
+        executable->ReadAt(&(machine->mainMemory[physAddr]), chunk,
+                           inFileAddr + done);
+        done += chunk;
+    }
 }
 
 //----------------------------------------------------------------------
@@ -124,7 +156,14 @@ AddrSpace::AddrSpace(OpenFile *executable)
 
 AddrSpace::~AddrSpace()
 {
-   delete [] this->pageTable;
+    // machine is NULL if NachOS is already cleaning up (see Cleanup)
+    if (machine != NULL) {
+        machine->memoryMapSem->P();
+        for (unsigned int i = 0; i < numPages; i++)
+            machine->memoryMap->Clear(pageTable[i].physicalPage);
+        machine->memoryMapSem->V();
+    }
+    delete [] this->pageTable;
 }
 
 //----------------------------------------------------------------------
