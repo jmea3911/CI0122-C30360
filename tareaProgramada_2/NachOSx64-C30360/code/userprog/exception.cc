@@ -32,6 +32,9 @@
 #include <fcntl.h>
 #include "synch.h"
 #include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define SC_NachOS	015177
 
@@ -465,6 +468,26 @@ void NachOS_CondBroadcast() {		// System call 23
  *  System call interface: Socket_t Socket( int, int )
  */
 void NachOS_Socket() {			// System call 30
+   int family = machine->ReadRegister( 4 );	// 0: AF_INET, 1: AF_INET6
+   int type = machine->ReadRegister( 5 );	// 0: SOCK_STREAM, 1: SOCK_DGRAM
+   int nachosHandle = -1;
+   NachosOpenFilesTable * table = currentThread->openFilesTable;
+
+   if ( ( family == 0 || family == 1 ) && ( type == 0 || type == 1 ) ) {
+      int unixHandle = socket( family == 0 ? AF_INET : AF_INET6,
+                               type == 0 ? SOCK_STREAM : SOCK_DGRAM, 0 );
+      if ( unixHandle >= 0 ) {
+         // The socket lives in the open files table, so Read, Write
+         // and Close work on it like on any other file
+         if ( table != NULL )
+            nachosHandle = table->Open( unixHandle );
+         if ( nachosHandle < 0 )
+            close( unixHandle );
+      }
+   }
+
+   machine->WriteRegister( 2, nachosHandle );
+   returnFromSystemCall();
 }
 
 
@@ -472,6 +495,36 @@ void NachOS_Socket() {			// System call 30
  *  System call interface: Socket_t Connect( char *, int )
  */
 void NachOS_Connect() {		// System call 31
+   int sockId = machine->ReadRegister( 4 );
+   char ip[ 64 ];
+   readStringFromUser( machine->ReadRegister( 5 ), ip, sizeof( ip ) );
+   int port = machine->ReadRegister( 6 );
+   int result = -1;
+   NachosOpenFilesTable * table = currentThread->openFilesTable;
+
+   // Console handles (0, 1, 2) are not sockets
+   if ( sockId > 2 && table != NULL && table->isOpened( sockId ) ) {
+      int unixHandle = table->getUnixHandle( sockId );
+      struct sockaddr_in addr4;
+      struct sockaddr_in6 addr6;
+      memset( & addr4, 0, sizeof( addr4 ) );
+      memset( & addr6, 0, sizeof( addr6 ) );
+
+      if ( inet_pton( AF_INET, ip, & addr4.sin_addr ) == 1 ) {
+         addr4.sin_family = AF_INET;
+         addr4.sin_port = htons( port );
+         result = connect( unixHandle, (struct sockaddr *) & addr4, sizeof( addr4 ) );
+      } else if ( inet_pton( AF_INET6, ip, & addr6.sin6_addr ) == 1 ) {
+         addr6.sin6_family = AF_INET6;
+         addr6.sin6_port = htons( port );
+         result = connect( unixHandle, (struct sockaddr *) & addr6, sizeof( addr6 ) );
+      }
+      if ( result < 0 )
+         result = -1;
+   }
+
+   machine->WriteRegister( 2, result );
+   returnFromSystemCall();
 }
 
 
