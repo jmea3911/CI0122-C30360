@@ -127,6 +127,7 @@ class Thread {
     void RestoreUserState();		// restore user-level register state
 
     AddrSpace *space;			// User code this thread is running.
+    int spaceId;				// Exec process id, -1 if none
     NachosOpenFilesTable *openFilesTable;	// Files opened by the process
 #endif
 };

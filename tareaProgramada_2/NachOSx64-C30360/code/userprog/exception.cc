@@ -35,6 +35,15 @@
 
 #define SC_NachOS	015177
 
+// Process table for Exec/Join/Exit: one slot per SpaceId
+#define MAX_PROCESSES 32
+struct ProcessInfo {
+   bool used;
+   int status;
+   Semaphore * finished;	// V() by Exit, P() by Join
+};
+static ProcessInfo processes[ MAX_PROCESSES ];
+
 void returnFromSystemCall() {
 
    int pc = machine->ReadRegister( PCReg );
@@ -93,6 +102,14 @@ void NachOS_Exit() {		// System call 1
       if ( table->delThread() == 0 )
          delete table;
    }
+
+   // Main thread of an Exec'd process: publish the status, wake the Join
+   int id = currentThread->spaceId;
+   if ( id >= 0 && id < MAX_PROCESSES && processes[ id ].used ) {
+      processes[ id ].status = status;
+      processes[ id ].finished->V();
+   }
+   // The AddrSpace is deleted with the Thread (~Thread), freeing its frames
    currentThread->Finish();
 
 }
@@ -101,7 +118,53 @@ void NachOS_Exit() {		// System call 1
 /*
  *  System call interface: SpaceId Exec( char * )
  */
+static void NachosExecThread( void * p ) {
+   currentThread->space->InitRegisters();
+   currentThread->space->RestoreState();
+   machine->Run();
+   ASSERT( false );
+}
+
 void NachOS_Exec() {		// System call 2
+   char name[ 256 ];
+   int id = -1;
+   readStringFromUser( machine->ReadRegister( 4 ), name, sizeof( name ) );
+
+   for ( int i = 0; i < MAX_PROCESSES && id == -1; i++ )
+      if ( ! processes[ i ].used )
+         id = i;
+
+   OpenFile * executable = ( id == -1 ) ? NULL : fileSystem->Open( name );
+   if ( executable == NULL ) {
+      machine->WriteRegister( 2, -1 );
+      returnFromSystemCall();
+      return;
+   }
+
+   // Not enough free frames: fail instead of aborting NachOS
+   if ( ! AddrSpace::Fits( executable ) ) {
+      delete executable;
+      machine->WriteRegister( 2, -1 );
+      returnFromSystemCall();
+      return;
+   }
+
+   char * threadName = new char[ 32 ];
+   strcpy( threadName, "Exec process" );
+   Thread * newT = new Thread( threadName );
+   newT->space = new AddrSpace( executable );
+   delete executable;			// everything is already in memory
+   newT->openFilesTable = new NachosOpenFilesTable();
+   newT->spaceId = id;
+
+   processes[ id ].used = true;
+   processes[ id ].status = 0;
+   processes[ id ].finished = new Semaphore( "process finished", 0 );
+
+   newT->Fork( NachosExecThread, NULL );
+
+   machine->WriteRegister( 2, id );
+   returnFromSystemCall();
 }
 
 
@@ -109,6 +172,17 @@ void NachOS_Exec() {		// System call 2
  *  System call interface: int Join( SpaceId )
  */
 void NachOS_Join() {		// System call 3
+   int id = machine->ReadRegister( 4 );
+   int result = -1;
+   if ( id >= 0 && id < MAX_PROCESSES && processes[ id ].used ) {
+      processes[ id ].finished->P();	// blocks until the child Exits
+      result = processes[ id ].status;
+      delete processes[ id ].finished;
+      processes[ id ].finished = NULL;
+      processes[ id ].used = false;
+   }
+   machine->WriteRegister( 2, result );
+   returnFromSystemCall();
 }
 
 

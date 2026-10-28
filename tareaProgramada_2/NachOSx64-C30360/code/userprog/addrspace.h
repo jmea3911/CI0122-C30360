@@ -29,6 +29,8 @@ class AddrSpace {
 
     AddrSpace(AddrSpace *parent);
 
+    static bool Fits(OpenFile *executable);	// enough free frames?
+
     void InitRegisters();		// Initialize user-level CPU registers,
 					// before jumping to user code
 

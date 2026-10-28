@@ -85,6 +85,7 @@ AddrSpace::AddrSpace(OpenFile *executable)
 
 
 // check there are enough free frames, then take them (all under the mutex)
+    machine->memoryMapSem->P();
     if (numPages > (unsigned int)machine->memoryMap->NumClear()) {
         machine->memoryMapSem->V();
         // code and data pages can be shared by Fork; the stack is always private
@@ -124,6 +125,24 @@ AddrSpace::AddrSpace(OpenFile *executable)
         LoadSegment(executable, noffH.initData.virtualAddr,
                     noffH.initData.size, noffH.initData.inFileAddr);
     }
+}
+
+bool
+AddrSpace::Fits(OpenFile *executable)
+{
+    NoffHeader noffH;
+    executable->ReadAt((char *)&noffH, sizeof(noffH), 0);
+    if ((noffH.noffMagic != NOFFMAGIC) &&
+		(WordToHost(noffH.noffMagic) == NOFFMAGIC))
+    	SwapHeader(&noffH);
+    if (noffH.noffMagic != NOFFMAGIC)
+        return false;
+    unsigned int size = noffH.code.size + noffH.initData.size +
+                        noffH.uninitData.size + UserStackSize;
+    machine->memoryMapSem->P();
+    bool ok = divRoundUp(size, PageSize) <= (unsigned int)machine->memoryMap->NumClear();
+    machine->memoryMapSem->V();
+    return ok;
 }
 
 AddrSpace::AddrSpace(AddrSpace *parent)
